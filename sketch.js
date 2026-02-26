@@ -91,6 +91,12 @@ const TOW_TRUCK_RENDER_SIZE = U(72);
 const ERASER_RADIUS = U(38);
 const BLOOD_SPRAY_HIT_RADIUS = U(50);
 const OFFSCREEN_PAD = U(250);
+const WORLD_EDGE_PAD_Y = U(60);
+
+function clampWorldY(y) {
+  const pad = min(WORLD_EDGE_PAD_Y, floor(height * 0.5));
+  return constrain(y, pad, height - pad);
+}
 
 // Evasion tuning (helps frogs dodge before contact)
 const FROG_EVADE_LEAD_FRAMES = 9;           // how many frames ahead frogs "look"
@@ -658,6 +664,7 @@ function nextCreatedAt() {
 
 function spawnCar(vx, sp, x, y) {
   const dir = vx >= 0 ? 1 : -1;
+  y = clampWorldY(y);
 
   let t = constrain(sp / 120, 0, 1);
   t = pow(t, 1.8);
@@ -678,6 +685,7 @@ function spawnCar(vx, sp, x, y) {
 
 function spawnFrog(x, y, opts = {}) {
   const allowStack = (opts.allowStack !== false);
+  y = clampWorldY(y);
   const createdAt = nextCreatedAt();
 
   if (MODE === "still") {
@@ -1648,7 +1656,7 @@ class Ambulance {
 class Frog {
   constructor(x, y, createdAt) {
     this.createdAt = createdAt;
-    this.pos = createVector(x, y);
+    this.pos = createVector(x, clampWorldY(y));
 
     this.pile = 1;
     this.pileCooldown = 0;
@@ -1710,7 +1718,7 @@ class Frog {
     this.startPos = this.pos.copy();
     const side = U(92);
     const forward = U(14);
-    this.targetPos = createVector(this.pos.x + car.dir * forward, this.pos.y + awayY * side);
+    this.targetPos = createVector(this.pos.x + car.dir * forward, clampWorldY(this.pos.y + awayY * side));
   }
 
   squish(dir) {
@@ -1753,6 +1761,8 @@ class Frog {
         this.setState("idle");
       }
     }
+
+    this.pos.y = clampWorldY(this.pos.y);
   }
 
   jumpFrameForced() {
@@ -1801,7 +1811,7 @@ class Frog {
 class Car {
   constructor(x, y, dir, speed, createdAt) {
     this.createdAt = createdAt;
-    this.pos = createVector(x, y);
+    this.pos = createVector(x, clampWorldY(y));
     this.dir = dir;
     this.speed = speed;
 
@@ -1882,6 +1892,7 @@ class Car {
     this.wobble *= 0.9;
     this.pos.x += this.speed * this.dir;
     this.pos.y += this.wobble;
+    this.pos.y = clampWorldY(this.pos.y);
 
     if (this.state === "crash") {
       this.crashT++;
