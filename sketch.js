@@ -98,6 +98,63 @@ const FROG_EVADE_BASE_WARN_X = U(40);       // minimum x distance to trigger eva
 const FROG_EVADE_WARN_Y = U(44);            // y proximity to consider a threat
 const FROG_EVADE_COOLDOWN_FRAMES = 16;      // prevent repeated evade triggers
 
+// Blood pixel-art rendering
+const BLOOD_PIXEL_SCALE = 8; // higher = chunkier pixels
+let bloodLayer = null;
+
+function ensureBloodLayer() {
+  // Use integer upscaling (no fractional stretch) to keep pixels perfectly square.
+  const w = max(1, ceil(width / BLOOD_PIXEL_SCALE));
+  const h = max(1, ceil(height / BLOOD_PIXEL_SCALE));
+  if (bloodLayer && bloodLayer.width === w && bloodLayer.height === h) return;
+  bloodLayer = createGraphics(w, h);
+  bloodLayer.pixelDensity(1);
+  bloodLayer.noSmooth();
+}
+
+function postProcessBloodLayer() {
+  if (!bloodLayer) return;
+  const w = bloodLayer.width;
+
+  bloodLayer.loadPixels();
+  const pix = bloodLayer.pixels;
+
+  const alphaCut = 24;
+  const br = 140, bg = 20, bb = 30;
+
+  // 4x4 Bayer matrix for hard-pixel alpha dithering (keeps pixels crisp, avoids halos).
+  const bayer4 = [
+    0,  8,  2, 10,
+    12, 4, 14, 6,
+    3, 11,  1,  9,
+    15, 7, 13, 5
+  ];
+
+  // Force a single red color and convert soft edges into hard pixels (no highlights / no grey/white borders).
+  for (let i = 0, p = 0; i < pix.length; i += 4, p++) {
+    const a = pix[i + 3];
+    if (a <= alphaCut) {
+      pix[i + 3] = 0;
+      continue;
+    }
+
+    const x = p % w;
+    const y = (p / w) | 0;
+    const t = (bayer4[(x & 3) + ((y & 3) << 2)] + 1) / 16;
+    if ((a / 255) < t) {
+      pix[i + 3] = 0;
+      continue;
+    }
+
+    pix[i + 0] = br;
+    pix[i + 1] = bg;
+    pix[i + 2] = bb;
+    pix[i + 3] = 255;
+  }
+
+  bloodLayer.updatePixels();
+}
+
 // -------------------------
 // Blood fade settings
 // -------------------------
@@ -233,12 +290,24 @@ function setup() {
 function draw() {
   background(235);
 
-  // blood floor layer (bottom)
+  // blood floor layer (pixel-art style)
+  ensureBloodLayer();
+  bloodLayer.clear();
+  bloodLayer.push();
+  bloodLayer.scale(1 / BLOOD_PIXEL_SCALE);
   for (const b of bloodSplats) {
     if (MODE === "animate") b.update();
-    b.draw();
+    b.draw(bloodLayer);
   }
+  bloodLayer.pop();
+  postProcessBloodLayer();
   bloodSplats = bloodSplats.filter(b => !b.dead);
+
+  push();
+  noSmooth();
+  imageMode(CORNER);
+  image(bloodLayer, 0, 0, bloodLayer.width * BLOOD_PIXEL_SCALE, bloodLayer.height * BLOOD_PIXEL_SCALE);
+  pop();
 
   if (brushLabel && brushSlider) brushLabel.html("Brush: " + brushSlider.value());
   updateEraserButtonUI();
@@ -442,6 +511,8 @@ function applyCanvasFitToWindow() {
 
   document.body.style.margin = "0";
   document.body.style.overflow = "hidden";
+
+  ensureBloodLayer();
 }
 
 function windowResized() {
@@ -868,10 +939,10 @@ class BloodSpray {
     for (const p of this.puddles) p.update();
   }
 
-  draw() {
+  draw(pg) {
     const a = this.alpha;
-    for (const p of this.puddles) p.draw(a);
-    for (const d of this.drops) d.draw(a);
+    for (const p of this.puddles) p.draw(pg, a);
+    for (const d of this.drops) d.draw(pg, a);
   }
 }
 
@@ -908,20 +979,19 @@ class BloodDrop {
     this.y = round(this.y);
   }
 
-  draw(alpha = 255) {
-    push();
-    noSmooth();
-    stroke(0, alpha);
-    strokeWeight(1);
-    fill(140, 20, 30, alpha);
+  draw(pg, alpha = 255) {
+    pg.push();
+    pg.noSmooth();
+    pg.noStroke();
+    pg.fill(140, 20, 30, alpha);
 
     const sp = sqrt(this.vx * this.vx + this.vy * this.vy);
     const stretch = constrain(map(sp, 0, UF(20), 1.0, 1.8), 1.0, 1.8);
 
-    translate(this.x, this.y);
-    rotate(atan2(this.vy, this.vx) + this.spin);
-    ellipse(0, 0, round(this.r * stretch), round(this.r));
-    pop();
+    pg.translate(this.x, this.y);
+    pg.rotate(atan2(this.vy, this.vx) + this.spin);
+    pg.ellipse(0, 0, round(this.r * stretch), round(this.r));
+    pg.pop();
   }
 }
 
@@ -953,21 +1023,20 @@ class BloodPuddle {
     if (this.grow >= 1) this.frozen = true;
   }
 
-  draw(alpha = 255) {
-    push();
-    noSmooth();
-    translate(this.x, this.y);
-    if (this.dir === -1) scale(-1, 1);
+  draw(pg, alpha = 255) {
+    pg.push();
+    pg.noSmooth();
+    pg.translate(this.x, this.y);
+    if (this.dir === -1) pg.scale(-1, 1);
 
     const e = this.grow * this.grow * (3 - 2 * this.grow);
     const w = this.w * e;
     const h = this.h * e;
 
-    stroke(0, alpha);
-    strokeWeight(1);
-    fill(140, 20, 30, alpha);
+    pg.noStroke();
+    pg.fill(140, 20, 30, alpha);
 
-    beginShape();
+    pg.beginShape();
     const n = 24;
     for (let i = 0; i < n; i++) {
       const t = (i / n) * TWO_PI;
@@ -980,15 +1049,15 @@ class BloodPuddle {
       const xx = cos(t) * rx + w * 0.10;
       const yy = sin(t) * ry;
 
-      curveVertex(round(xx), round(yy));
+      pg.curveVertex(round(xx), round(yy));
     }
-    endShape(CLOSE);
+    pg.endShape(CLOSE);
 
-    noStroke();
-    fill(235, 200, 205, alpha);
-    ellipse(round(-w * 0.08), round(-h * 0.18), max(U(2), w * 0.08), max(U(2), h * 0.18));
+    pg.noStroke();
+    pg.fill(235, 200, 205, alpha);
+    pg.ellipse(round(-w * 0.08), round(-h * 0.18), max(U(2), w * 0.08), max(U(2), h * 0.18));
 
-    pop();
+    pg.pop();
   }
 }
 
@@ -1033,63 +1102,61 @@ class SimpleFloorSplat {
 
   freezeNow() { this.grow = 1; }
 
-  draw() {
+  draw(pg) {
     const alpha = this.alpha;
 
-    push();
-    noSmooth();
-    translate(this.x, this.y);
-    if (this.dir === -1) scale(-1, 1);
+    pg.push();
+    pg.noSmooth();
+    pg.translate(this.x, this.y);
+    if (this.dir === -1) pg.scale(-1, 1);
 
     const e = this.grow * this.grow * (3 - 2 * this.grow);
 
     const L = this.size * 2.2 * e;
     const H = this.size * 0.32 * e;
 
-    stroke(0, alpha);
-    strokeWeight(1);
-    fill(140, 20, 30, alpha);
+    pg.noStroke();
+    pg.fill(140, 20, 30, alpha);
 
-    beginShape();
-    curveVertex(round(-L * 0.25), round(-H * 0.25));
-    curveVertex(round(-L * 0.25), round(-H * 0.25));
+    pg.beginShape();
+    pg.curveVertex(round(-L * 0.25), round(-H * 0.25));
+    pg.curveVertex(round(-L * 0.25), round(-H * 0.25));
 
-    curveVertex(round(L * 0.10),  round(-H * 0.55));
-    curveVertex(round(L * 0.55),  round(-H * 0.35));
-    curveVertex(round(L * 1.00),  round(0));
+    pg.curveVertex(round(L * 0.10),  round(-H * 0.55));
+    pg.curveVertex(round(L * 0.55),  round(-H * 0.35));
+    pg.curveVertex(round(L * 1.00),  round(0));
 
-    curveVertex(round(L * 0.55),  round(H * 0.35));
-    curveVertex(round(L * 0.10),  round(H * 0.55));
+    pg.curveVertex(round(L * 0.55),  round(H * 0.35));
+    pg.curveVertex(round(L * 0.10),  round(H * 0.55));
 
-    curveVertex(round(-L * 0.25), round(H * 0.25));
-    curveVertex(round(-L * 0.25), round(H * 0.25));
-    endShape(CLOSE);
+    pg.curveVertex(round(-L * 0.25), round(H * 0.25));
+    pg.curveVertex(round(-L * 0.25), round(H * 0.25));
+    pg.endShape(CLOSE);
 
-    noStroke();
-    fill(95, 10, 18, alpha);
-    beginShape();
-    curveVertex(round(-L * 0.12), round(-H * 0.12));
-    curveVertex(round(-L * 0.12), round(-H * 0.12));
-    curveVertex(round(L * 0.12),  round(-H * 0.30));
-    curveVertex(round(L * 0.55),  round(-H * 0.18));
-    curveVertex(round(L * 0.82),  round(0));
-    curveVertex(round(L * 0.55),  round(H * 0.18));
-    curveVertex(round(L * 0.12),  round(H * 0.30));
-    curveVertex(round(-L * 0.12), round(H * 0.12));
-    curveVertex(round(-L * 0.12), round(H * 0.12));
-    endShape(CLOSE);
+    pg.noStroke();
+    pg.fill(95, 10, 18, alpha);
+    pg.beginShape();
+    pg.curveVertex(round(-L * 0.12), round(-H * 0.12));
+    pg.curveVertex(round(-L * 0.12), round(-H * 0.12));
+    pg.curveVertex(round(L * 0.12),  round(-H * 0.30));
+    pg.curveVertex(round(L * 0.55),  round(-H * 0.18));
+    pg.curveVertex(round(L * 0.82),  round(0));
+    pg.curveVertex(round(L * 0.55),  round(H * 0.18));
+    pg.curveVertex(round(L * 0.12),  round(H * 0.30));
+    pg.curveVertex(round(-L * 0.12), round(H * 0.12));
+    pg.curveVertex(round(-L * 0.12), round(H * 0.12));
+    pg.endShape(CLOSE);
 
-    stroke(0, alpha);
-    strokeWeight(1);
-    fill(140, 20, 30, alpha);
+    pg.noStroke();
+    pg.fill(140, 20, 30, alpha);
     for (const b of this.branches) {
       const bx = L * (0.35 + b.t * 0.75);
       const by = H * b.offY;
       const bw = this.size * (b.w * 10) * e;
-      ellipse(round(bx), round(by), round(bw), round(bw * 0.55));
+      pg.ellipse(round(bx), round(by), round(bw), round(bw * 0.55));
     }
 
-    pop();
+    pg.pop();
   }
 }
 
