@@ -92,6 +92,12 @@ const ERASER_RADIUS = U(38);
 const BLOOD_SPRAY_HIT_RADIUS = U(50);
 const OFFSCREEN_PAD = U(250);
 
+// Evasion tuning (helps frogs dodge before contact)
+const FROG_EVADE_LEAD_FRAMES = 9;           // how many frames ahead frogs "look"
+const FROG_EVADE_BASE_WARN_X = U(40);       // minimum x distance to trigger evade
+const FROG_EVADE_WARN_Y = U(44);            // y proximity to consider a threat
+const FROG_EVADE_COOLDOWN_FRAMES = 16;      // prevent repeated evade triggers
+
 // -------------------------
 // Blood fade settings
 // -------------------------
@@ -674,8 +680,8 @@ function stillCollideFrogWithCars(frog) {
 // -------------------------
 function requiredSpeedToSquish(pile) {
   // Higher = frogs survive more often (evade instead of getting squished).
-  const BASE = UF(7.2);
-  const STEP = UF(1.5);
+  const BASE = UF(9.4);
+  const STEP = UF(1.05);
   return BASE + (pile - 1) * STEP;
 }
 
@@ -689,6 +695,19 @@ function handleCarFrogInteractions() {
     for (let f of frogs) {
       if (f.isSquished()) continue;
 
+      // Proactive evasion: dodge slightly BEFORE contact (pile=1 only)
+      if (f.pile === 1 && c.state === "drive" && f.evadeCooldown === 0) {
+        const dy = abs(f.pos.y - c.pos.y);
+        if (dy < FROG_EVADE_WARN_Y) {
+          const ahead = (f.pos.x - c.pos.x) * c.dir; // >0 means car is behind, approaching
+          const warnX = FROG_EVADE_BASE_WARN_X + c.speed * FROG_EVADE_LEAD_FRAMES;
+          if (ahead > 0 && ahead < warnX) {
+            f.evadeFrom(c);
+            continue;
+          }
+        }
+      }
+
       if (rectCircleOverlap(c.getAABB(), f.pos, f.hitRadius)) {
         const pile = f.pile;
         const need = requiredSpeedToSquish(pile);
@@ -699,7 +718,6 @@ function handleCarFrogInteractions() {
             c.onHit(true);
           } else {
             f.evadeFrom(c);
-            c.onHit(false);
           }
         } else {
           if (c.speed >= need) {
@@ -1591,6 +1609,8 @@ class Frog {
 
     this.removed = false;
 
+    this.evadeCooldown = 0;
+
     // per-frog ambulance scheduling
     this.ambulanceScheduled = false;
     this.ambulanceSpawned = false;
@@ -1611,16 +1631,18 @@ class Frog {
   evadeFrom(car) {
     if (this.isSquished()) return;
     if (this.state === "jump") return;
+    if (this.evadeCooldown > 0) return;
 
     this.setState("jump");
     this.bump();
+    this.evadeCooldown = FROG_EVADE_COOLDOWN_FRAMES;
 
     const awayY = this.pos.y < car.pos.y ? -1 : 1;
     this.jumpDirY = awayY;
 
     this.startPos = this.pos.copy();
-    const side = U(70);
-    const forward = U(10);
+    const side = U(92);
+    const forward = U(14);
     this.targetPos = createVector(this.pos.x + car.dir * forward, this.pos.y + awayY * side);
   }
 
@@ -1645,6 +1667,7 @@ class Frog {
 
   update() {
     this.pileCooldown = max(0, this.pileCooldown - 1);
+    this.evadeCooldown = max(0, this.evadeCooldown - 1);
 
     this.anim.update();
     this.bounce *= 0.88;
@@ -1656,7 +1679,7 @@ class Frog {
       this.pos.x = lerp(this.startPos.x, this.targetPos.x, e);
       this.pos.y = lerp(this.startPos.y, this.targetPos.y, e);
 
-      this.jumpLift = -sin(p * PI) * U(18);
+      this.jumpLift = -sin(p * PI) * U(22);
 
       if (this.anim.done) {
         this.jumpLift = 0;
