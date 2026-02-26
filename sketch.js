@@ -66,7 +66,7 @@ let brushSlider, brushLabel;
 const UI_BAR_H = 46;
 
 // Global upscale (makes *everything* bigger: frogs, cars, blood, ambulances, etc.)
-const WORLD_SCALE = 1.2;
+const WORLD_SCALE = 1;
 function U(v) { return Math.round(v * WORLD_SCALE); }   // lengths (px-ish)
 function UF(v) { return v * WORLD_SCALE; }              // speeds/accelerations (float)
 
